@@ -1,13 +1,19 @@
-# stockpriceupdater
-Finally, a reliable way in Google Apps Script to update stock prices.
+# Detailed tutorial to make your own stock price updater using Google Sheets and Google Apps Scripts
 
-There are many share price updaters out there, but they tend to be only for US stocks. As someone who has a portfolio crossing USA, Singapore and Hong Kong stocks, the usual techniques don’t work for me because:
+## Summary
+Finally, a reliable way using Google Sheets and Google Apps Scripts to update stock prices for a basket comprising stocks from multiple exchanges that are not supported by Sheet's native `=GOOGLEFINANCE` function. Uses web scraping and buffering stock quotes, in order to reliably deliver stock prices.
+
+## Why?
+This is a detailed tutorial because it was so painful to build this so I figured it might be useful to some of you out there. 
+
+As I discovered, there are many share price updaters out there, but they tend to be only for US stocks. For someone who wants to lookup a portfolio crossing USA, Singapore and Hong Kong stocks, the usual techniques don’t work because:
 
 * Simply using =GOOGLEFINANCE(ticker) fails for non USA stocks.
-* How do you do the correct accounting across SGD and HKD?
-* In trying to webscrape prices using a simple URL, sometimes the calls to a site fail, resulting in #N/A (more on this below).
+* In trying to lookup prices from a given website, sometimes the calls to a site fail, resulting in #N/A (more on this below). Also the native lookup in Sheets makes far too many requests to sites, which problem affects their traffic but if you use Google Sheets it seems to trigger every few minutes and it can't be controlled. 
 
-There are three sections to this guide:
+My intent here is to make a theoretical script useful for looking up stock prices for 10-20 stocks once every 6 hours so this isn't the kind of real time spamming that would be illegal. Not for trading (who would be so stupid as to use hours-old prices!), but just for instructional purposes as this was an interesting problem in web look ups and system design.
+
+This tutorial is step one of three steps. The other two will come at a later time.
 
 1. looking up the prices in a reliable manner.
 2. tracking transactions as buy/sell/dividend
@@ -29,24 +35,26 @@ As mentioned above there are several limitations to the simple approach of `=GOO
 | 2388      | BOC\(hong kong\)           | =GOOGLEFINANCE\(A7\) | 28\.1   |
 | 601318    | Ping An Insurance \(XSSC\) | =GOOGLEFINANCE\(A8\) | \#N/A   |
 
-So one workaround is to use a webscraping technique in Google Sheets:
+So one workaround is to use a look up technique in Google Sheets:
 
 * `=IMPORTXML("https://sg.finance.yahoo.com/quote/" & TICKER,"//span[@class='Trsdu(0.3s) Trsdu(0.3s) Fw(b) Fz(36px) Mb(-4px) D(b)']" )`
 
 * `=value(mid(IMPORTXML("http://www.dividends.sg/view/" & TICKER, "/html/body/div/div[2]/div/div/div[1]/h4/span"),5,99))`
 
-But [dividends.sg](dividends.sg) didn’t like it and if you access the site too frequently you can get blocked. And scraping [finance.yahoo.com](finance.yahoo.com) sometimes yielded #N/A errors with no explanation on the cell except it failed to get any values. While this is suitable for now-and-then analyses, a single #N/A error will propagate and mean that your whole portfolio calculation will also result in a #N/A error. If you try to use error handling, eg:
+But [dividends.sg](dividends.sg) didn’t like it and if you access the site too frequently. And scraping [finance.yahoo.com](finance.yahoo.com) sometimes yielded #N/A errors with no explanation on the cell except it failed to get any values. While this is suitable for now-and-then analyses, a single #N/A error will propagate and mean that your whole portfolio calculation will also result in a #N/A error. If you try to use error handling, eg:
 
 `=IFERROR(stock_price, value_if_error)`
 
 Then because you're replacing with some arbitrary value like 0, your portfolio will be inaccurately portrayed. I had to wait for 5 minutes for the errors to refresh and they eventually go away, but the errors didn't always disappear even after waiting.
 
+Also, it isn't fair to Yahoo if we have a hundred stock prices pinging them every few minutes. But there's no way to control the frequency! Or is there?
+
 **So I needed a more robust system.**
 
 ## Key Considerations:
 
-* I don’t need it to be updated to seconds because I’m not that kind of trader, but this is just for a daily update on the portfolio. If I really need finer analyses I use the direct numbers on Yahoo Finance or Webull. Therefore, hours to update is fine. We will use the Google App Scripts because it has Triggers that run your script every X hours.
-* Must be resistant to website lookup errors, in order to get a timely calculation of portfolio.
+* I don’t need it to be updated to seconds because I’m not that kind of trader, but this is just for a once or twice daily update on a portfolio. If I really need finer analyses I use the direct numbers looking at the Yahoo Finance website manually. Therefore, hours to update is fine. We will use the Google App Scripts because it has Triggers that run your script every X hours.
+* Must be resistant to website lookup errors, in order to get reliable calculation of portfolio.
 * Self-contained on Google Sheets so I don’t have to run anything on a client and I can access it on the go.
 
 ## The Solution
@@ -60,7 +68,18 @@ See Figure 1 for the flowchart of how this buffered system would work.
 
 ## How? The Nuts and Bolts
 
-1. The first thing to do is to create a new sheet in **Google Sheets** and name it “buffer”, and save the file.
+1. The first thing to do is to create a new sheet in **Google Sheets** and name it “buffer”, and save the file. Lay out your symbols, exchange, stock name, currency, etc as follows:
+
+| \. | A            | B     | C                 | D        | E        | F          | G               | H | I | J        | K                               |
+|----|--------------|-------|-------------------|----------|----------|------------|-----------------|---|---|----------|---------------------------------|
+| 1  | stock symbol | Type  | stock name        | exchange | currency | new\_price | buffered\_price |   |   | LASTROW= |                               |
+| 2  | 2388         | Stock | BOC\(hong kong\)  | HKEX     | HKD      |            |                 |   |   | LASTRUN= |  |
+| 3  | 601318       | Stock | Ping An Insurance | XSSC     | CNH      |            |                 |   |   |
+| 4  | AW9U         | Reit  | First Reit        | SGX      | SGD      |            |                 |   |   |
+| 5  | BLCM         | Stock | Bellicum          | USA      | USD      |            |                 |   |   |
+| 6  | CRPU         | Reit  | Sasseur REIT      | SGX      | SGD      |            |                 |   |   |
+| 7  | DIS          | Stock | Disney            | USA      | USD      |
+
 
 2. Now navigate to Tools > Script Editor and create a new script and name it “buffer stock prices”. Google App Scripts uses Javascript so we will be coding in that.
 
@@ -214,7 +233,7 @@ function lookupQuote(symbol, url) {
   var initMatch = /(<span class="Trsdu)(.*?)(\<\/span\>)/.exec(html, 1);
   Logger.log(initMatch[0]);  
   // regex 2
-  var finalMatch = /(\>)([\d.,]*)(\<)/.exec(initMatch[0],1)[0];
+  var finalMatch = /(\>)([\d\.\,]*)(\<)/.exec(initMatch[0],1)[0];
   // remove any commas or <> to arrive at just the numbers and coerce into Float.
   var cleanedMatch = parseFloat(finalMatch.replace('<','').replace('>','').replace(',',''));
   
@@ -500,23 +519,176 @@ function lookupQuote(symbol, url) {
   return cleanedMatch;
 }
 ```
-This function does the following:
-1. takes the `symbol`, and also the `url` generated by `URLFromExchange()`.
-2. three tries to load the webpage at `url`. Only proceeds if page is loaded successfully, which is signalled by a `page.getResponseCode() == 200`. If loading is unsuccessful even after 3 tries, this function returns a result of `-1` for the stock price, which is impossible and `-1` is used to signal later on **NOT** to update *that* particular symbol's price.
-3. extracts the html of the loaded page as a string using `var html = page.getContentText();`.
+This function is a bit longer and more complicated, so I will take it one chunk at a time.
 
-This is what the page looks like:
+1. The function takes the `symbol`, and also the `url` generated by `URLFromExchange()`:
+```
+function lookupQuote(symbol, url) {  
+```
+
+2. Next we make three tries to load the webpage at `url`. 
+    * `var page = UrlFetchApp.fetch(url,options);` attempts to load the page at `url`.
+    * Only proceeds if page is loaded successfully, which is signalled by a `page.getResponseCode() == 200`. 
+    * If loading is unsuccessful even after 3 tries, this function returns a result of `-1` for the stock price. 
+    * `-1` is an impossible stock price and is used to signal later on **NOT** to update *that* particular symbol's price.
+    * the statement `try {do something} catch(err) {do another thing}` means to "try" to do something but if an error occurs, then do another thing. 
+  
+```
+  try {
+    // Three attempts to load the page
+    for (var n=0;n<3;n++){      
+      var page = UrlFetchApp.fetch(url,options);
+      // code 200 means successfully loaded.
+      if (page.getResponseCode() == 200){
+        Logger.log("Attempt " + (n+1))
+        break;}
+    }
+    if (page.getResponseCode() != 200){
+      throw "Page failed to load even after 3 attempts."
+    }
+    
+  }
+  catch(err) {
+    Logger.log("While looking up symbol " + symbol)
+    Logger.log("Error occured " + err)
+    return -1
+  }
+```
+
+3. Next we extracts the html of the loaded page as a string using `var html = page.getContentText();`.
+
+**When web scraping we need to know what section exactly do we want to extract information from. This is what the page looks like:**
 
 ![Screenshot of yahoo finance](/images/F02-yahoofinanceexample.png). 
 
-And if you right click on the stock price of 28.200 and click inspect (in Chrome) to get to the source code, you will see this:
+**And if you right click on the stock price of 28.200 and click inspect (in Chrome) to get to the source code, you will see this:**
 
 ![inspect source code](/images/F03-inspectedyahoo.png)
 
-4. Extracts out a section of interest using Regular Expressions (Regex). Specifically looks in the html for `<span>` with class property starting with `Trsdu`, then matches everything in a non-greedy fasion using `(.*?)` (where the non-greedy operator`?` tells it to take the shortest possible match. All the way until it encounters a `</span>`., which is what closes off the <span> class.
-    * the result string is something like `<span class="Trsdu(0.3s) Trsdu(0.3s) Fw(b) Fz(36px) Mb(-4px) D(b)" data-reactid="14">28.200</span>`. As you can see, the stock price is `28.200`, as expected from our inspection of the source code.
+One way to extract out the stock price is to use regex to cut out the desired string based on unique patterns before and after the desired string. (Another way would be to parse the website as xml structured data and access the correct tag, e.g. the exact span with a unique class identifier, but I couldn't work out the correct methods to parse the page as xml when loading with `UrlFetchApp.fetch(url,options)`).
+
+4. Extract out a section of interest using Regular Expressions (Regex). Specifically looks in the html for `<span>` with class property starting with `Trsdu`, then matches everything in a non-greedy fasion using `(.*?)` (where the non-greedy operator`?` tells it to take the shortest possible match. All the way until it encounters a `</span>`., which is what closes off the <span> class.
+
+If the code patterns are very complex and you're finding it difficult to identify the unique pattern, it is sometimes easier to make multiple slices, from broad to specific. That way, any unwanted but similar patterns are sliced away in earlier steps, making it easier to zoom in on the exact value of interest.
+
+The two sequential regex steps I used were:
+
+**Regex 1**, where my broadest cut was to take the pattern of `<span class="Trsdu` all the way to the closing `</span>`. Note that in Javascript, regex expressions are enclosed between the two slashes `/regex_goes_here/.exec(string_to_execute_on, number_to_find)` 
+```
+  // use series of regex searches to extract out the desired strings 
+  // regex 1
+  var initMatch = /(<span class="Trsdu)(.*?)(\<\/span\>)/.exec(html, 1);  
+```
+This resulted in `<span class="Trsdu(0.3s) Trsdu(0.3s) Fw(b) Fz(36px) Mb(-4px) D(b)" data-reactid="14">28.200</span>`. 
+
+As you can see, the stock price is `28.200`, as expected from our inspection of the website and the source code. So we are in the right direction. But we still haven't isolated the stock price so a second regex is needed.
+
+**Regex 2**, where I isolate the pattern of `>28.200<` using the below regex. Note that special characters like `<` and `>` require the escape character "\", as in `\<` will match the string `<`. Escape character \ tells the regex that you want the next character as written.
+```
+  // regex 2
+  var finalMatch = /(\>)([\d\.\,]*)(\<)/.exec(initMatch[0],1)[0];
+```
+Above, the `\d` means digit and the `[\d\.\,]*` means I wish to look for any combination of digits, periods and commas (note the use of the escape character \). Commas handle the thousands separator if in use as in `1,001`. The final `*` tells the regex that I want any number of such characters. 
+
+The result is `>28.200<`. As you can see we still need to remove the <>, and also any commas as the thousands separator because Javascript cannot parse `1,001` as an integer or float i.e. 1001 but will throw an error. To remove these pesky characters, I simply do sequential string replacements using `finalMatch.replace('<','').replace('>','').replace(',','')`, and then convert from string to float using `parseFloat(string)`.
+
+```
+  // remove any commas or <> to arrive at just the numbers and coerce into Float.
+  var cleanedMatch = parseFloat(finalMatch.replace('<','').replace('>','').replace(',',''));
+```  
   
+5. finally, return the value of the stock price (now already a float) using `return cleanedMatch;`
+
+That's the end of the custom function `lookupQuote(symbol, url)`.
   
+Now let's head back up to SECTION D1, which I reproduce here because you may have forgotten your place:
+
+```
+  //SECTION D - LOOP THROUGH SYMBOLS AND GET PRICE FROM YAHOO FINANCE
   
-  
+  // SUBSECTION D1
     
+  for (var i = 0; i < symbols.length; i++) {
+  // Convert each value to string, where integers due to Hong Kong stock numbers gets converted to string without the decimal.
+    current_symbol = String(symbols[i]);
+    current_exchange = String(exchange[i]);
+    
+    // Get URL based on which stock exchange
+    url = URLFromExchange(current_symbol, current_exchange);
+    
+    // Look up the quote in Yahoo Finance
+    // if lookupQuote produces an error, quote will return -1
+    quote = lookupQuote(current_symbol, url);
+    
+    // set quote value in the (output) prices array
+    prices[i] = [quote];
+    
+  }
+```
+
+We had just examined `quote = lookupQuote(current_symbol, url);`
+
+The final step to SUBSECTION D1 is to update the output array `prices` with the value of `quote`. The for loop ensures that we go through each symbol-exchange pair in the input arrays.
+
+## SUBSECTION D2 - UPDATING THE VALUES
+
+```
+  // SUBSECTION D2 - UPDATING THE VALUES
+  
+  // update the sheet in column F, under the header "new_price"
+  sheet.getRange(2, 6, lastrow-1, 1).setValues(prices);
+  
+  // if result is not -1, ie a correct quote was found, then update the database
+  for (var k = 0; k < prices.length; k++) {
+    if (prices[k] != -1) {
+    sheet.getRange(2+k, 7).setValue(parseFloat(prices[k]))
+    }
+  }
+```
+
+We come to the ultimate code block. Just updating the spreadsheet with the quotes you have now obtained. Remember that a quote value of `-1` means we failed to load the webpage? So we will skip any quotes with value of `-1`.
+
+Recall that our "buffer" sheet had the following contents:
+
+| \. | A            | B     | C                 | D        | E        | F          | G               | H | I | J        | K                               |
+|----|--------------|-------|-------------------|----------|----------|------------|-----------------|---|---|----------|---------------------------------|
+| 1  | stock symbol | Type  | stock name        | exchange | currency | new\_price | buffered\_price |   |   | LASTROW= | 8                              |
+| 2  | 2388         | Stock | BOC\(hong kong\)  | HKEX     | HKD      |            |                 |   |   | LASTRUN= |  |
+| 3  | 601318       | Stock | Ping An Insurance | XSSC     | CNH      |            |                 |   |   |
+| 4  | AW9U         | Reit  | First Reit        | SGX      | SGD      |            |                 |   |   |
+| 5  | BLCM         | Stock | Bellicum          | USA      | USD      |            |                 |   |   |
+| 6  | CRPU         | Reit  | Sasseur REIT      | SGX      | SGD      |            |                 |   |   |
+| 7  | DIS          | Stock | Disney            | USA      | USD      |
+
+`sheet.getRange(2, 6, lastrow-1, 1).setValues(prices);` will place the quotes you found into the range F2:F7.
+
+The next for loop will update the buffered_price column if the quote is not `-1`.
+
+Now execute your script by selecting from the drop down list at the top of your Script editor `updateMasterList` and click the play button.
+
+After it completes running, you can check the console logs by pressing CTRL+ENTER to see what your script did. And then checking the Google Sheets you'll find it has updated thus!
+
+    
+| \. | A            | B     | C                 | D        | E        | F          | G               | H | I | J        | K                               |
+|----|--------------|-------|-------------------|----------|----------|------------|-----------------|---|---|----------|---------------------------------|
+| 1  | stock symbol | Type  | stock name        | exchange | currency | new\_price | buffered\_price |   |   | LASTROW= | 8                              |
+| 2  | 2388         | Stock | BOC\(hong kong\)  | HKEX     | HKD      | 28\.2      | 28\.2           |   |   | LASTRUN= | 9:47:59 PM HKT January 15, 2020 |
+| 3  | 601318       | Stock | Ping An Insurance | XSSC     | CNH      | 85\.81     | 85\.81          |
+| 4  | AW9U         | Reit  | First Reit        | SGX      | SGD      | 1          | 1               |
+| 5  | BLCM         | Stock | Bellicum          | USA      | USD      | 1\.75      | 1\.75           |
+| 6  | CRPU         | Reit  | Sasseur REIT      | SGX      | SGD      | 0\.91      | 0\.91           |
+| 7  | DIS          | Stock | Disney            | USA      | USD      | 145\.2     | 145\.2          |
+
+**And you're done with the coding!**
+
+# Creating a Trigger
+
+Once you're satisfied that your script works properly, from your Scripts editor, go to the menu `Edit > Project Triggers`. Create a new trigger, with these settings:
+
+![Trigger settings](/images/F04-triggersettings.png)
+
+Click save and now your trigger and it will execute to the time period you specified.
+
+You can now use a `=VLOOKUP` function in Google Sheets to use these buffered prices. You'll never encounter a #N/A error again when looking up prices!
+
+# Happy Investing!
