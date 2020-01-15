@@ -62,13 +62,9 @@ See Figure 1 for the flowchart of how this buffered system would work.
 
 1. The first thing to do is to create a new sheet in **Google Sheets** and name it “buffer”, and save the file.
 
-2. Then take note of the “url” of your sheet by opening it in your browser and copying the link:
-    * If your sheet is at `https://docs.google.com/spreadsheets/d/1jhgjhg9jhgjhgMVjFJ-9WjjhjVEHY/edit`
-    * Then your “url” is `1jhgjhg9jhgjhgMVjFJ-9WjjhjVEHY`
-    
-3. Now navigate to Tools > Script Editor and create a new script and name it “buffer stock prices”. Google App Scripts uses Javascript so we will be coding in that.
+2. Now navigate to Tools > Script Editor and create a new script and name it “buffer stock prices”. Google App Scripts uses Javascript so we will be coding in that.
 
-4. The code proper. I will show the whole code first and then explain each section.
+3. The code proper. I will show the whole code first and then explain each section.
 
 ```
 /*
@@ -122,21 +118,24 @@ function updateMasterList() {
     current_symbol = String(symbols[i]);
     current_exchange = String(exchange[i]);
     
+    // Get URL based on which stock exchange
     url = URLFromExchange(current_symbol, current_exchange);
-    // if lookupQuote produces an error, quote = -1
+    
+    // Look up the quote in Yahoo Finance
+    // if lookupQuote produces an error, quote will return -1
     quote = lookupQuote(current_symbol, url);
+    
+    // set quote value in the (output) prices array
     prices[i] = [quote];
     
   }
   
-  Logger.log([symbols,prices]);
+  Logger.log([symbols,prices]);  
   
-  
-  // update the sheet in column F, "new_price"  
-  Logger.log(prices);
+  // update the sheet in column F, under the header "new_price"
   sheet.getRange(2, 6, lastrow-1, 1).setValues(prices);
   
-  // if result is not -1 then update the database
+  // if result is not -1, ie a correct quote was found, then update the database
   for (var k = 0; k < prices.length; k++) {
     if (prices[k] != -1) {
     sheet.getRange(2+k, 7).setValue(parseFloat(prices[k]))
@@ -146,7 +145,7 @@ function updateMasterList() {
 
 }
 
-
+// ALTER THE URL'S SUFFIX BASED ON WHICH EXCHANGE IS BEING INVOKED
 function URLFromExchange(symbol, exchange) {  
   var suffix = ''
   
@@ -173,17 +172,20 @@ function URLFromExchange(symbol, exchange) {
     
 }
 
-
+// LOOK UP THE QUOTE WITH 3 ATTEMPTS
 function lookupQuote(symbol, url) {  
-  
+    
   var options = {
     'method':'GET',
+    // muteHttpExceptions will prevent throwing an error if html errors such as 404 are encountered.
     'muteHttpExceptions': true
   };
   
   try {
+    // Three attempts to load the page
     for (var n=0;n<3;n++){      
       var page = UrlFetchApp.fetch(url,options);
+      // code 200 means successfully loaded.
       if (page.getResponseCode() == 200){
         Logger.log("Attempt " + (n+1))
         break;}
@@ -198,29 +200,23 @@ function lookupQuote(symbol, url) {
     Logger.log("Error occured " + err)
     return -1
   }
-  var html = page.getContentText();
-  var fromText = '<div class="D(ib) Va(m) Maw(65%) Ov(h)" data-reactid="32">';
-  var toText = '</span>';
   
+  // get the html as string
+  var html = page.getContentText();
+  
+  // use series of regex searches to extract out the desired strings 
+  // regex 1
   var initMatch = /(<span class="Trsdu)(.*?)(\<\/span\>)/.exec(html, 1);
-  Logger.log(initMatch[0]);
+  Logger.log(initMatch[0]);  
+  // regex 2
   var finalMatch = /(\>)([\d.,]*)(\<)/.exec(initMatch[0],1)[0];
+  // remove any commas or <> to arrive at just the numbers and coerce into Float.
   var cleanedMatch = parseFloat(finalMatch.replace('<','').replace('>','').replace(',',''));
   
   return cleanedMatch;
 }
 
-
-function testwrite() {
-  var sid = "1Qm9sYdR4qHtsEnMVgJt3ServxtxxS0KFJ-9WYFjVEHY";
-  var wb = SpreadsheetApp.openById(sid);
-  var sheet = wb.getSheetByName("buffer");
-  var lastrow = parseInt(sheet.getRange(1, 11).getValue());
-  
-  sheet.getRange(2,6,5,1).setValues([[1],[2],[3],[4],[5]])
-
-}
-
+// GET THE DATETIMESTAMP
 function getTimeNow() {  
   var t = new Date();
   var today = t.toLocaleTimeString() + ' ' + t.toLocaleDateString();
@@ -228,3 +224,116 @@ function getTimeNow() {
   return today;
   }
 ```
+
+**Let's break it down**
+
+## SECTION A - GET SHEET OBJECT
+
+```
+// SECTION A - GET SHEET OBJECT
+  
+  // specify the "url" of your workbook
+  var sid = "1Qm9sYdR4qHtsEnMVgJt3ServxtxxS0KFJ-9WYFjVEHY";
+  // assign the workbook to an object
+  var wb = SpreadsheetApp.openById(sid);
+  // get the sheet named "buffer"
+  var sheet = wb.getSheetByName("buffer");
+  // get the lastrow using a spreadsheet formula on the buffer sheet
+  var lastrow = parseInt(sheet.getRange(1, 11).getValue());  
+  // set the timestamp to the present time.
+  sheet.getRange(2, 11).setValue(getTimeNow());
+```
+
+The next thing is to take note of the **identifier** of your sheet by opening it in your browser and copying the link:
+    * If your sheet is at `https://docs.google.com/spreadsheets/d/1jhgjhg9jhgjhgMVjFJ-9WjjhjVEHY/edit`
+    * Then your “url” is `1jhgjhg9jhgjhgMVjFJ-9WjjhjVEHY`
+    * we will use this to write to your Google Sheet.
+    * IMPORTANT: Google will prompt you to give your Apps Script account permission to change your Drive contents. Check the permissions and accept it. *Basically you need permission to read and write your own Sheet because Google sees your .js script as an external "addin" and therefore has security measures.*
+
+Update the `var sid =` with your sheet's identifider (enclosed in quotes because it is a string).
+
+The only thing unclear in SECTION A is:
+
+```
+  // get the lastrow using a spreadsheet formula on the buffer sheet
+  var lastrow = parseInt(sheet.getRange(1, 11).getValue());  
+```
+
+For our purposes we need to be able to specify the last row on the sheet. We will use a spreadsheet-based formula, so set your K1:L2 cells as follows (**Table 2**). The LASTRUN value in L2 will be used by the script so we can keep track of when it was last updated.
+
+**Table 2: Lastrow formula**
+| row\\column | J        | K                                             |
+|-------------|----------|-----------------------------------------------|
+| 1           | LASTROW= | =rows\(filter\(A:A, not\(ISBLANK\(A:A\)\)\)\) |
+| 2           | LASTRUN= |
+
+Explaining the formula `=rows(filter(A:A, not(ISBLANK(A:A))))`:
+
+1. `filter(A:A, not(ISBLANK(A:A)))` apply a filter to column A to find non blank cells. i.e., get an array of cells with values. **Note that this assumes no blanks in between the rows, which we just have to keep in mind but this is a simple constraint to fulfil.**
+
+2. `=rows()` counts the number of rows in the filtered result, and assuming no blanks, this is the row number of the last value in the sheet.
+
+Check that your `LASTROW` value is now properly calculated. You can experiment with blanks too to see the effect.
+
+Now we can simply lookup the "buffer" sheet in your Google Sheets object, and get the `LASTROW` value in **K1 (row=1, col=11)** thus:
+
+```
+  // get the lastrow using a spreadsheet formula on the buffer sheet
+  var lastrow = parseInt(sheet.getRange(1, 11).getValue());  
+```
+
+   where `sheet` is the "buffer" sheet object; `.getRange(row, column)` selects the cell of interest; and `.getValue()` extracts the value of that cell. The data type appears to be automatically picked, which in this case is a float.
+
+Next, to get the timestamp, we have to first define a separate function, as follows.
+
+### getTimeNow() function
+
+You need to create a timestamp so you know when the numbers came from, to prevent you using old data. Javascript feels more difficult to generate timestamps because of its enormous flexibility. One way to get a string of the date and time is the following function placed in your script. I used the combination of the two functions  `.toLocaleTimeString()` and `.toLocaleDateString()` because no matter how I tried to play around with the options, I couldn’t get a single Date object to show *both* the DATE and TIME.
+
+```
+// GET THE DATETIMESTAMP
+function getTimeNow() {  
+  var t = new Date();
+  var today = t.toLocaleTimeString() + ' ' + t.toLocaleDateString();
+  Logger.log(today);
+  return today;
+  }
+```
+
+With this added to the bottom of your script and **NOT INSIDE YOUR MAIN FUNCTION**, the calling line simply gets a string of the date and time stamp and writes it to **K2 (row=2, column=1)**:
+
+```
+  // set the timestamp to the present time.
+  sheet.getRange(2, 11).setValue(getTimeNow());
+```
+
+## SECTION B - GET INPUTS
+
+```
+//SECTION B - GET INPUTS
+  
+  // these inputs take the format of a 2D array [[s1],[s2],[s3],...]
+  var symbols = sheet.getRange(2, 1, lastrow-1, 1).getValues();
+  var exchange = sheet.getRange(2, 4, lastrow-1, 1).getValues();    
+  
+  // Make a record of the input values for debugging purposes.
+  Logger.log(symbols);
+  Logger.log(exchange);  
+```
+
+We use `.getRange(2, 1, lastrow-1, 1)` based on `.getRange(row, column, row_size, column_size)` where the parameter `row_size` means how many rows to collect, which in this case is one less than the number of rows to account for the header (note that we started from row 2); and `column_size` of `1` to specify only one column. Because we are selecting a range, we will need to extract the values slighly differently.
+
+In the same way as getting the values from a particular range above, we use a variant `.getValues()`, which returns the range values as a 2D array. The data takes the form of a 2D array even though we have only extracted a single columnnar range. The lenth of the second dimension in this case is 1. 
+
+```
+  //SECTION C - INITIALISE INTERMEDIATE AND OUTPUT VARIABLES
+  
+  var prices = Array(symbols.length);
+  var current_symbol = '';
+  var current_exchange = '';
+  var url = '';
+  var quote = 0.0    
+```
+
+
+
