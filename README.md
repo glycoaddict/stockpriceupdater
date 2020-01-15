@@ -113,8 +113,10 @@ function updateMasterList() {
   
   //SECTION D - LOOP THROUGH SYMBOLS AND GET PRICE FROM YAHOO FINANCE
   
+  // SUBSECTION D1
+    
   for (var i = 0; i < symbols.length; i++) {
-    // Convert each value to string, where integers due to Hong Kong stock numbers gets converted to string wihtout the decimal.
+  // Convert each value to string, where integers due to Hong Kong stock numbers gets converted to string without the decimal.
     current_symbol = String(symbols[i]);
     current_exchange = String(exchange[i]);
     
@@ -132,6 +134,8 @@ function updateMasterList() {
   
   Logger.log([symbols,prices]);  
   
+  // SUBSECTION D2 - UPDATING THE VALUES
+  
   // update the sheet in column F, under the header "new_price"
   sheet.getRange(2, 6, lastrow-1, 1).setValues(prices);
   
@@ -145,7 +149,8 @@ function updateMasterList() {
 
 }
 
-// ALTER THE URL'S SUFFIX BASED ON WHICH EXCHANGE IS BEING INVOKED
+
+// FUNCTION: ALTER THE URL'S SUFFIX BASED ON WHICH EXCHANGE IS BEING INVOKED
 function URLFromExchange(symbol, exchange) {  
   var suffix = ''
   
@@ -323,7 +328,14 @@ With this added to the bottom of your script and **NOT INSIDE YOUR MAIN FUNCTION
 
 We use `.getRange(2, 1, lastrow-1, 1)` based on `.getRange(row, column, row_size, column_size)` where the parameter `row_size` means how many rows to collect, which in this case is one less than the number of rows to account for the header (note that we started from row 2); and `column_size` of `1` to specify only one column. Because we are selecting a range, we will need to extract the values slighly differently.
 
-In the same way as getting the values from a particular range above, we use a variant `.getValues()`, which returns the range values as a 2D array. The data takes the form of a 2D array even though we have only extracted a single columnnar range. The lenth of the second dimension in this case is 1. 
+In the same way as getting the values from a particular range above, we use a variant `.getValues()`, which returns the range values as a 2D array. The data takes the form of a 2D array even though we have only extracted a single columnnar range. The lenth of the second dimension in this case is 1. Why this is important is that later when we are creating the output array of prices, we need to store them in an array: `[[price1],[price2],...[priceN]]`.
+
+Our inputs are now two arrays of **symbols** and their respective **exchanges**, e.g.:
+* `[[2388.0], [601318.0], [AW9U], [BLCM], [CRPU], [DIS], [EDUC], [ES3], [EWM], [FB], [G3B], [GOOG], [J91U], [NXST], [O9P], [OV8], [TEAM], [TMO], [VET], [VOO], [VTI], [XAR]]`
+* `[[HKEX], [XSSC], [SGX], [USA], [SGX], [USA], [USA], [SGX], [USA], [USA], [SGX], [USA], [SGX], [USA], [SGX], [SGX], [USA], [USA], [USA], [USA], [USA], [USA]]`
+
+
+## SECTION C - INITIALISE INTERMEDIATE AND OUTPUT VARIABLES
 
 ```
   //SECTION C - INITIALISE INTERMEDIATE AND OUTPUT VARIABLES
@@ -335,5 +347,176 @@ In the same way as getting the values from a particular range above, we use a va
   var quote = 0.0    
 ```
 
+We have two options when it comes to creating array outputs:
 
+* create a zero-length array and append to the array each time in the loop. This has the danger of insufficient values being added if an error is encountered, which would make the output the wrong size for the Range you want to write the values to later.
 
+* pre-make an array of the desired length (filled with blanks or zeros) and update each position in the array as needed. This ensures the correct size of the array before you start to fill it. This is also likely faster as the append operation is usually slower than an assign operation. The code is `var prices = Array(symbols.length);`
+
+We also initialise four other necessary variables here. Why here? Generally for readability, so we know the gamut of variables before we dive into the loop, but so I don't generate a new variable for each iteration of the loop, which is probably heavier on memory. 
+
+## SECTION D - LOOP THROUGH SYMBOLS AND GET PRICE FROM YAHOO FINANCE
+
+We now look at the heart of this script, the loop that will go through the list of symbols and exchanges and retrieve the stock price.
+
+```
+  // SUBSECTION D1
+    
+  for (var i = 0; i < symbols.length; i++) {
+  // Convert each value to string, where integers due to Hong Kong stock numbers gets converted to string without the decimal.
+    current_symbol = String(symbols[i]);
+    current_exchange = String(exchange[i]);
+    
+    // Get URL based on which stock exchange
+    url = URLFromExchange(current_symbol, current_exchange);
+    
+    // Look up the quote in Yahoo Finance
+    // if lookupQuote produces an error, quote will return -1
+    quote = lookupQuote(current_symbol, url);
+    
+    // set quote value in the (output) prices array
+    prices[i] = [quote];
+    
+  }
+  
+  Logger.log([symbols,prices]);  
+  
+  // SUBSECTION D2 - UPDATING THE VALUES
+  
+  // update the sheet in column F, under the header "new_price"
+  sheet.getRange(2, 6, lastrow-1, 1).setValues(prices);
+  
+  // if result is not -1, ie a correct quote was found, then update the database
+  for (var k = 0; k < prices.length; k++) {
+    if (prices[k] != -1) {
+    sheet.getRange(2+k, 7).setValue(parseFloat(prices[k]))
+    }
+  }
+```
+
+## SUBSECTION D1
+
+`current_symbol = String(symbols[i]);`
+`current_exchange = String(exchange[i]);`
+
+The first SUBSECTION D1 converts the stock symbols to strings. This is needed because the Hong Kong exchange stock symbols are numbers and are parsed as floats when extracting from the Google Sheet. For example, the stock of Bank of China (Hong Kong)'s symbol is "2388" but is parsed as `2388.0`. Converting back to string renders it properly `"2388"`.
+
+```
+    // Get URL based on which stock exchange
+    url = URLFromExchange(current_symbol, current_exchange);
+```
+The above line calls a function that does what it says, namely return the correct form of the yahoo finance url according to which exchange the symbol is listed on.
+
+The function:
+
+```
+// FUNCTION: ALTER THE URL'S SUFFIX BASED ON WHICH EXCHANGE IS BEING INVOKED
+function URLFromExchange(symbol, exchange) {  
+  var suffix = ''
+  
+  switch(exchange) {
+    case "USA":
+      suffix = '';
+      break;
+    
+    case "SGX":
+      suffix = '.SI';
+      break;
+    
+    case "HKEX":
+      suffix = '.HK';
+      break;
+    
+    case "XSSC":
+      suffix = '.SS';
+      break;
+  }
+    
+    
+  return 'https://finance.yahoo.com/quote/' + symbol + suffix + '?p=' + Math.floor(Math.random()*1000);
+    
+}
+```
+
+Right now this function covers the exchanges:
+* SGX
+* Hong Kong
+* Shanghai Hong Kong Stock Connect
+* USA, i.e. NASDAQ + NYSE
+
+How this function works is basically depending on the exchange, it appends a different suffix to the url `'https://finance.yahoo.com/quote/' + symbol + suffix + '?p=' + Math.floor(Math.random()*1000);`. E.g. for Singapore Stock Exchange, SGX it suffixes `".SI"`. And it adds in a spurious query of an integer random number from 0-1000 `?p=Math.floor(Math.random()*1000)` to mix things up in case multiple calls to the same url gets incorrecly flagged by the yahoo servers as some sort of spamming or attack (no idea if they would). So for the symbol `ES3`, the final url will be `https://finance.yahoo.com/quote/ES3.SI?=123`.
+
+The next step is to extract the stock price from the HTML of the loaded website, using this function call below:
+```
+    // Look up the quote in Yahoo Finance
+    // if lookupQuote produces an error, quote will return -1
+    quote = lookupQuote(current_symbol, url);
+```
+
+The function lookupQuote() is explained below:
+
+```
+// LOOK UP THE QUOTE WITH 3 ATTEMPTS
+function lookupQuote(symbol, url) {  
+    
+  var options = {
+    'method':'GET',
+    // muteHttpExceptions will prevent throwing an error if html errors such as 404 are encountered.
+    'muteHttpExceptions': true
+  };
+  
+  try {
+    // Three attempts to load the page
+    for (var n=0;n<3;n++){      
+      var page = UrlFetchApp.fetch(url,options);
+      // code 200 means successfully loaded.
+      if (page.getResponseCode() == 200){
+        Logger.log("Attempt " + (n+1))
+        break;}
+    }
+    if (page.getResponseCode() != 200){
+      throw "Page failed to load even after 3 attempts."
+    }
+    
+  }
+  catch(err) {
+    Logger.log("While looking up symbol " + symbol)
+    Logger.log("Error occured " + err)
+    return -1
+  }
+  
+  // get the html as string
+  var html = page.getContentText();
+  
+  // use series of regex searches to extract out the desired strings 
+  // regex 1
+  var initMatch = /(<span class="Trsdu)(.*?)(\<\/span\>)/.exec(html, 1);
+  Logger.log(initMatch[0]);  
+  // regex 2
+  var finalMatch = /(\>)([\d.,]*)(\<)/.exec(initMatch[0],1)[0];
+  // remove any commas or <> to arrive at just the numbers and coerce into Float.
+  var cleanedMatch = parseFloat(finalMatch.replace('<','').replace('>','').replace(',',''));
+  
+  return cleanedMatch;
+}
+```
+This function does the following:
+1. takes the `symbol`, and also the `url` generated by `URLFromExchange()`.
+2. three tries to load the webpage at `url`. Only proceeds if page is loaded successfully, which is signalled by a `page.getResponseCode() == 200`. If loading is unsuccessful even after 3 tries, this function returns a result of `-1` for the stock price, which is impossible and `-1` is used to signal later on **NOT** to update *that* particular symbol's price.
+3. extracts the html of the loaded page as a string using `var html = page.getContentText();`.
+
+This is what the page looks like:
+
+![Screenshot of yahoo finance](/images/F02-yahoofinanceexample.png). 
+
+And if you right click on the stock price of 28.200 and click inspect (in Chrome) to get to the source code, you will see this:
+
+![inspect source code](/images/F03-inspectedyahoo.png)
+
+4. Extracts out a section of interest using Regular Expressions (Regex). Specifically looks in the html for `<span>` with class property starting with `Trsdu`, then matches everything in a non-greedy fasion using `(.*?)` (where the non-greedy operator`?` tells it to take the shortest possible match. All the way until it encounters a `</span>`., which is what closes off the <span> class.
+    * the result string is something like `<span class="Trsdu(0.3s) Trsdu(0.3s) Fw(b) Fz(36px) Mb(-4px) D(b)" data-reactid="14">28.200</span>`. As you can see, the stock price is `28.200`, as expected from our inspection of the source code.
+  
+  
+  
+  
+    
